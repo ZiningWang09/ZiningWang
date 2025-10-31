@@ -1,0 +1,134 @@
+---
+title: "数据处理与分析"
+format: html
+execute:
+  echo: true
+  warning: false
+  error: false
+  results: "markup"
+---
+# 前置设置
+```{python}
+import pandas as pd
+import numpy as np
+import os
+os.chdir("/Users/wangzining/Desktop/CFPS/person")
+```
+
+# 2016年数据处理
+```{python}
+df16 = pd.read_stata("cfps2016_person.dta",convert_categoricals=False)
+
+# 重命名变量
+df16 = df16.rename(columns={
+    "cfps_gender": "sex_2016",
+    "income": "total_income_2016",
+    "qp201": "health_self_2016",
+    "qn12012": "life_satisfaction_2016",
+    "qea205y": "mage_y_2016",
+    "qea205m": "mage_m_2016",
+    "qea0": "marital_status_2016",
+    "cfps_birthy": "birth_y_2016",
+    "pn412": "pos_emo_1",
+    "pn416": "pos_emo_2"
+})
+
+# 构造积极情绪变量（文献中未列出具体计算公式，此处暂且采用均值计算分数）
+df16["pos_emo_2016"] = df16[["pos_emo_1", "pos_emo_2"]].mean(axis=1)
+
+# 保留所需变量
+keep_vars_16 = [
+    "pid", "sex_2016", "total_income_2016", "health_self_2016", "pos_emo_2016",
+    "life_satisfaction_2016", "mage_y_2016", "mage_m_2016",
+    "marital_status_2016", "birth_y_2016"
+]
+df16 = df16[keep_vars_16]
+
+# 保存为中间文件
+df16.to_stata("cfps2016_core.dta", write_index=False)
+```
+
+# 2018年数据处理
+```{python}
+df18 = pd.read_stata("cfps2018_person.dta",convert_categoricals=False)
+
+# 重命名变量
+df18 = df18.rename(columns={
+    "gender_update": "sex_2018",
+    "qg12": "total_income_2018",
+    "qp201": "health_self_2018",
+    "qn12012": "life_satisfaction_2018",
+    "qea205y": "mage_y_2018",
+    "qea205m": "mage_m_2018",
+    "qea0": "marital_status_2018",
+    "qa001y": "birth_y_2018",
+    "qa001m": "birth_m_2018",
+    "qn412": "pos_emo_1",
+    "qn416": "pos_emo_2"
+})
+
+# 构造积极情绪变量
+df18["pos_emo_2018"] = df18[["pos_emo_1", "pos_emo_2"]].mean(axis=1)
+
+# 保留所需变量
+keep_vars_18 = [
+    "pid", "sex_2018", "total_income_2018", "health_self_2018", "pos_emo_2018",
+    "life_satisfaction_2018", "mage_y_2018", "mage_m_2018",
+    "marital_status_2018", "birth_y_2018", "birth_m_2018"
+]
+df18 = df18[keep_vars_18]
+
+# 保存为中间文件
+df18.to_stata("cfps2018_core.dta", write_index=False)
+```
+
+# 数据集合并
+```{python}
+panel = pd.merge(df16, df18, on="pid", how="inner")
+
+# 保存合并结果
+panel.to_stata("/Users/wangzining/Desktop/CFPS/person/cfps_panel_2016_2018.dta", write_index=False)
+
+# 缺失值替换
+panel = panel.applymap(lambda x: np.nan if isinstance(x, (int, float)) and x < 0 else x)
+
+# 出生年份与年龄计算
+panel = panel.rename(columns={"birth_y_2016": "birthy2016", "birth_y_2018": "birthy2018"})
+panel["birth"] = panel["birthy2016"]
+
+# 如果2018年出生年份不为空且不同，则替换
+panel.loc[(~panel["birthy2018"].isna()) & (panel["birthy2018"] != panel["birthy2016"]), "birth"] = panel["birthy2018"]
+
+panel["age_2016"] = 2016 - panel["birth"]
+panel["age_2018"] = 2018 - panel["birth"]
+
+# 筛选18–29岁样本
+panel = panel[(panel["age_2016"] >= 18) & (panel["age_2016"] <= 29)]
+
+print("筛选后的样本数量：", len(panel))
+
+# 婚姻状态变量
+panel["married_2016"] = np.nan
+panel.loc[panel["marital_status_2016"] == 2, "married_2016"] = 1
+panel.loc[panel["marital_status_2016"].isin([1, 3, 4, 5]), "married_2016"] = 0
+
+panel["married_2018"] = np.nan
+panel.loc[panel["marital_status_2018"] == 2, "married_2018"] = 1
+panel.loc[panel["marital_status_2018"].isin([1, 3, 4, 5]), "married_2018"] = 0
+
+# 结婚年龄计算
+panel["mage_2016"] = np.where(panel["married_2016"] == 1,
+                              panel["mage_y_2016"] - panel["birth"], np.nan)
+panel["mage_2018"] = np.where(panel["married_2018"] == 1,
+                              panel["mage_y_2018"] - panel["birth"], np.nan)
+
+# 检查异常值（<10或>100）
+abnormal = panel[(panel["mage_2016"].between(10, 100) == False) |
+                 (panel["mage_2018"].between(10, 100) == False)]
+print("异常结婚年龄样本：")
+print(abnormal[["pid", "mage_2016", "mage_2018"]])
+
+# 最终保存结果
+# panel.to_stata("/Users/wangzining/Desktop/CFPS/person/cfps_panel_final_2016_2018.dta", write_index=False)
+panel.to_csv("/Users/wangzining/Desktop/CFPS/person/cfps_panel_final_2016_2018.csv", index=False, encoding="utf-8-sig")
+```
